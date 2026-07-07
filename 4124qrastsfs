@@ -152,7 +152,8 @@ local function getAllToolEggData()
     return eggList
 end
 
--- Saves only Secret/Mythic/Super pets with Big, Mega, or Rainbow modifiers.
+-- Saves Secret pets automatically.
+-- Saves Mythic/Super pets only if they have any PetSize or Rainbow type.
 local function checkPetData()
     local backpack = LocalPlayer:FindFirstChild("Backpack")
     if not backpack then return false end
@@ -174,10 +175,11 @@ local function checkPetData()
             local size = petSize:lower()
             local petTypeLower = petType:lower()
 
-            local isWantedRarity = rarity == "secret" or rarity == "mythic" or rarity == "super"
-            local hasWantedModifier = size == "big" or size == "mega" or petTypeLower == "rainbow"
+            local isSecret = rarity == "secret"
+            local isWantedRarity = rarity == "mythic" or rarity == "super"
+            local hasWantedModifier = size ~= "" or petTypeLower == "rainbow"
 
-            if isWantedRarity and hasWantedModifier then
+            if isSecret or (isWantedRarity and hasWantedModifier) then
                 print(string.format("Target Saved! Rarity: %s | Size: '%s' | Type: '%s'", petRarity, petSize, petType))
                 return true
             end
