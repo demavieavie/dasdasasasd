@@ -190,8 +190,8 @@ local function sendWebhook(petName, petRarity, petSize, petType)
     end)
 end
 
--- Saves Secret pets automatically.
--- Saves Mythic/Super pets only if they have any PetSize or Rainbow type.
+-- Secret stops rollback/rejoin.
+-- Mythic/Super with any PetSize or Rainbow also stops rollback/rejoin.
 local function checkPetData()
     local backpack = LocalPlayer:FindFirstChild("Backpack")
     if not backpack then return false end
@@ -217,7 +217,13 @@ local function checkPetData()
             local isWantedRarity = rarity == "mythic" or rarity == "super"
             local hasWantedModifier = size ~= "" or petTypeLower == "rainbow"
 
-            if isSecret or (isWantedRarity and hasWantedModifier) then
+            if isSecret then
+                print(string.format("Secret Saved! Rarity: %s | Size: '%s' | Type: '%s'", petRarity, petSize, petType))
+                sendWebhook(item.Name, petRarity, petSize, petType)
+                return true
+            end
+
+            if isWantedRarity and hasWantedModifier then
                 print(string.format("Target Saved! Rarity: %s | Size: '%s' | Type: '%s'", petRarity, petSize, petType))
                 sendWebhook(item.Name, petRarity, petSize, petType)
                 return true
