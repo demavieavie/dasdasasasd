@@ -97,6 +97,9 @@ end)
 -- ==========================================
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local HttpService = game:GetService("HttpService")
+
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1524059522493317331/DzrGCyWCzLmhalRZTDWs6HD0YLyNdrsMG6ZeI5M6v1OmevKIS8Bv7Jm2axGKdC7SHnuf"
 
 -- Requiring the internal game data modules
 local PetData = require(ReplicatedStorage.SharedData.PetData)
@@ -152,6 +155,41 @@ local function getAllToolEggData()
     return eggList
 end
 
+local function sendWebhook(petName, petRarity, petSize, petType)
+    local requestFunc = (syn and syn.request)
+        or http_request
+        or request
+        or (fluxus and fluxus.request)
+        or (http and http.request)
+
+    if type(requestFunc) ~= "function" then
+        warn("Webhook request function not available.")
+        return
+    end
+
+    local details = string.format(
+        "King Hamka dapet pet: %s\nRarity: %s\nPetSize: %s\nPetType: %s",
+        tostring(petName),
+        tostring(petRarity ~= "" and petRarity or "-"),
+        tostring(petSize ~= "" and petSize or "-"),
+        tostring(petType ~= "" and petType or "-")
+    )
+
+    pcall(function()
+        requestFunc({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode({
+                username = "King Hamka",
+                content = details
+            })
+        })
+    end)
+end
+
 -- Saves Secret pets automatically.
 -- Saves Mythic/Super pets only if they have any PetSize or Rainbow type.
 local function checkPetData()
@@ -181,6 +219,7 @@ local function checkPetData()
 
             if isSecret or (isWantedRarity and hasWantedModifier) then
                 print(string.format("Target Saved! Rarity: %s | Size: '%s' | Type: '%s'", petRarity, petSize, petType))
+                sendWebhook(item.Name, petRarity, petSize, petType)
                 return true
             end
         end
