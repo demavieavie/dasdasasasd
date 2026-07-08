@@ -7,6 +7,7 @@ local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local IGNORED_KEYWORDS = { "kg", "matching", "matched", "bye" }
+local rollbackStopped = false
 
 -- Queue this script to automatically re-run upon joining the next server
 local queueOnTeleport = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
@@ -44,9 +45,14 @@ end
 
 local reconnecting = false
 local function reconnect()
-    if reconnecting then return end
+    if reconnecting or rollbackStopped then return end
     reconnecting = true
     task.wait(1.5)
+
+    if rollbackStopped then
+        reconnecting = false
+        return
+    end
 
     if LocalPlayer then
         local success = false
@@ -73,6 +79,7 @@ if promptOverlay then
         if child.Name == "ErrorPrompt" then
             task.defer(function()
                 task.wait(0.3)
+                if rollbackStopped then return end
                 if promptHasIgnoredKickText(child) then return end
                 reconnect()
             end)
@@ -88,6 +95,7 @@ end
 pcall(function()
     TeleportService.TeleportInitFailed:Connect(function()
         task.wait(3)
+        if rollbackStopped then return end
         reconnect()
     end)
 end)
@@ -143,10 +151,10 @@ local function getAllToolEggData()
         for _, item in ipairs(backpack:GetChildren()) do
             if item:IsA("Tool") then
                 local eggAttribute = item:GetAttribute("Egg")
-                if eggAttribute ~= nil then
+                if tostring(eggAttribute) == "Rainbow Egg" then
                     table.insert(eggList, {
-                        name = tostring(eggAttribute),
-                        count = tonumber(item:GetAttribute("Count"))
+                        name = "Rainbow Egg",
+                        count = math.max(1, tonumber(item:GetAttribute("Count")) or 1)
                     })
                 end
             end
@@ -190,14 +198,33 @@ local function sendWebhook(petName, petRarity, petSize, petType)
     end)
 end
 
--- Secret stops rollback/rejoin.
--- Mythic/Super with any PetSize or Rainbow also stops rollback/rejoin.
-local function checkPetData()
+local function normalizeName(value)
+    return tostring(value or ""):lower():gsub("[^%w]", "")
+end
+
+local function getExistingTools()
+    local existing = {}
     local backpack = LocalPlayer:FindFirstChild("Backpack")
-    if not backpack then return false end
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                existing[item] = true
+            end
+        end
+    end
+    return existing
+end
+
+-- Valid targets:
+-- 1. Any Rainbow pet whose rarity is Super.
+-- 2. Rainbow Bear.
+-- 3. Rainbow Raccoon (kept explicit even though Raccoon is currently Super).
+local function checkPetData(existingTools)
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if not backpack then return nil end
 
     for _, item in ipairs(backpack:GetChildren()) do
-        if item:IsA("Tool") then
+        if item:IsA("Tool") and not existingTools[item] then
             -- Lookup internal pet rarity from game module data
             local moduleKey = string.gsub(item.Name, "%s+", "")
             local petConfig = PetData[moduleKey]
@@ -210,41 +237,65 @@ local function checkPetData()
             local petType = petTypeAttribute and tostring(petTypeAttribute) or ""
 
             local rarity = petRarity:lower()
-            local size = petSize:lower()
             local petTypeLower = petType:lower()
+            local petName = normalizeName(item.Name)
 
-            local isSecret = rarity == "secret"
-            local isWantedRarity = rarity == "mythic" or rarity == "super"
-            local hasWantedModifier = size ~= "" or petTypeLower == "rainbow"
+            local isRainbow = petTypeLower == "rainbow"
+            local isRainbowSuper = isRainbow and rarity == "super"
+            local isNamedRainbowTarget = isRainbow
+                and (petName == "bear" or petName == "raccoon")
 
-            if isSecret then
-                print(string.format("Secret Saved! Rarity: %s | Size: '%s' | Type: '%s'", petRarity, petSize, petType))
-                sendWebhook(item.Name, petRarity, petSize, petType)
-                return true
-            end
-
-            if isWantedRarity and hasWantedModifier then
-                print(string.format("Target Saved! Rarity: %s | Size: '%s' | Type: '%s'", petRarity, petSize, petType))
-                sendWebhook(item.Name, petRarity, petSize, petType)
-                return true
+            if isRainbowSuper or isNamedRainbowTarget then
+                return {
+                    name = item.Name,
+                    rarity = petRarity,
+                    size = petSize,
+                    petType = petType
+                }
             end
         end
     end
-    return false
+    return nil
+end
+
+local function waitForTarget(existingTools, timeout)
+    local deadline = os.clock() + timeout
+    repeat
+        local target = checkPetData(existingTools)
+        if target then return target end
+        task.wait(0.1)
+    until os.clock() >= deadline
+    return nil
+end
+
+local function stopRollback(packetRemote)
+    rollbackStopped = true
+    reconnecting = false
+
+    pcall(function()
+        packetRemote:FireServer(54, "")
+        packetRemote:FireServer(54, string.char(0x20))
+        packetRemote:FireServer(54)
+        packetRemote:FireServer(20, "")
+    end)
 end
 
 local function main()
     local packetRemote = getRemote()
     if not packetRemote then
-        warn("Packet RemoteEvent not found!")
+        warn("Packet RemoteEvent not found! Rejoining to retry...")
+        reconnect()
         return
     end
 
     local eggsFound = getAllToolEggData()
     if #eggsFound == 0 then
-        table.insert(eggsFound, {name = "Common Egg", count = 1})
+        warn("Rainbow Egg not found. Rejoining to retry...")
+        reconnect()
+        return
     end
 
+    local existingTools = getExistingTools()
     local payload = string.char(0x3A, 0xF7)
     packetRemote:FireServer(payload)
     packetRemote:FireServer(54, "\xEF\xBF")
@@ -259,23 +310,34 @@ local function main()
     end
 
     task.wait(3)
-    while #TemporaryFolder:GetChildren() > 0 do
+    local animationDeadline = os.clock() + 30
+    while #TemporaryFolder:GetChildren() > 0 and os.clock() < animationDeadline do
         task.wait(0.1)
     end
 
-    -- Evaluate inventory against conditional rules
-    local targetFound = checkPetData()
+    -- Only evaluate newly-created tools from this hatch.
+    local target = waitForTarget(existingTools, 5)
 
-    if not targetFound then
+    if not target then
         print("No target criteria met. Triggering safe auto-rejoin...")
         reconnect()
     else
-        packetRemote:FireServer(54, "")
-        packetRemote:FireServer(54, string.char(0x20))
-        packetRemote:FireServer(54)
-        packetRemote:FireServer(20, "")
-        print("Target conditions met! Skipped auto-rejoin.")
+        -- Disable every reconnect path before doing network/webhook work.
+        stopRollback(packetRemote)
+        print(string.format(
+            "Target Saved! Pet: %s | Rarity: %s | Size: '%s' | Type: '%s'",
+            target.name,
+            target.rarity,
+            target.size,
+            target.petType
+        ))
+        sendWebhook(target.name, target.rarity, target.size, target.petType)
+        print("Rollback and auto-rejoin stopped.")
     end
 end
 
-main()
+local ok, err = xpcall(main, debug.traceback)
+if not ok then
+    warn("Main loop failed: " .. tostring(err))
+    reconnect()
+end
