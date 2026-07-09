@@ -111,6 +111,7 @@ local WEBHOOK_URL = "https://discord.com/api/webhooks/1524059522493317331/DzrGCy
 
 -- Requiring the internal game data modules
 local PetData = require(ReplicatedStorage.SharedData.PetData)
+local Networking = require(ReplicatedStorage.SharedModules.Networking)
 
 local menu = game:GetService("Workspace"):FindFirstChild("LoadingScreenMenu")
 
@@ -281,6 +282,17 @@ local function stopRollback(packetRemote)
 end
 
 local function main()
+    local loadDeadline = os.clock() + 30
+    while LocalPlayer:GetAttribute("LoadingScreenActive") and os.clock() < loadDeadline do
+        task.wait(0.1)
+    end
+
+    if LocalPlayer:GetAttribute("LoadingScreenActive") then
+        warn("Loading screen is still active. Rejoining to retry...")
+        reconnect()
+        return
+    end
+
     local packetRemote = getRemote()
     if not packetRemote then
         warn("Packet RemoteEvent not found! Rejoining to retry...")
@@ -301,12 +313,38 @@ local function main()
     packetRemote:FireServer(54, "\xEF\xBF")
     packetRemote:FireServer(54, ":\xF7")
 
+    local openedAnyEgg = false
     for _, eggData in ipairs(eggsFound) do
         for i = 1, eggData.count do
-            packetRemote:FireServer(
-                buffer.fromstring("\x8E\x00\x11\n" .. eggData.name)
-            )
+            local requestOk, response = pcall(function()
+                return Networking.Egg.OpenEgg:Fire(eggData.name)
+            end)
+
+            local opened = requestOk
+                and type(response) == "table"
+                and response.Success == true
+
+            if not opened then
+                warn(string.format(
+                    "Failed to open %s (%d/%d): %s",
+                    eggData.name,
+                    i,
+                    eggData.count,
+                    requestOk and tostring(response and response.Message or "server rejected request")
+                        or tostring(response)
+                ))
+                break
+            end
+
+            openedAnyEgg = true
+            task.wait(0.25)
         end
+    end
+
+    if not openedAnyEgg then
+        warn("No Rainbow Egg was opened. Rejoining to retry...")
+        reconnect()
+        return
     end
 
     task.wait(3)
